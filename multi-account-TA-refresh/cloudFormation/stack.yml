@@ -1,0 +1,123 @@
+# Ref: https://aws.amazon.com/blogs/security/how-to-use-a-single-iam-user-to-easily-access-all-your-accounts-by-using-the-aws-cli/
+# "dev" account = main payer here
+# "prod" account = every other account in the organization - main payer account will log into these to get/refresh TA checks
+
+Parameters:
+  UserName:
+    Type: String
+    Description: "IAM username of user who can refresh Trusted Advisor Checks"
+    Default: TrustedAdvisor-refresher
+
+  MainAccountID: 
+    Type: Number
+    Description: "AWS account ID for main payer/organizations account"
+    Default: 941837459948
+  
+  PayeeAccounts:
+    Type: "List<Number>"
+    Description: "List of AWS account IDs in the organization under the MainAccountID"
+    Default: "031704814400, 580054116499, 427979472953"
+
+Conditions:
+  IsMainAccount: !Equals
+    - !Ref "AWS::AccountId"
+    - !Ref MainAccountID
+
+  IsSubAccount: !Not
+    - !Condition IsMainAccount
+
+Resources:
+  AccountsListCustomResource:
+    Type: Custom::AccountsListCustomResource
+    Properties:
+      ServiceToken: !!GetAtt AccountsListLambda.arn
+  
+  AccountsListLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Description: "Get a list of all AWS accounts in the organization"
+      
+  # This role needs to be created in every org account except the main payer - create in main payer also for now
+  AssumeRoleFromMainPayer:
+    Condition: IsSubAccount
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action: "sts:AssumeRole"
+            Principal:
+              AWS:
+                - !Join
+                    - '' 
+                    - - 'arn:aws:iam::'
+                      - !Ref MainAccountID
+                      - ':user/'
+                      - !Ref UserName
+
+  # This policy needs to go into all accounts - other policies like cloudwatch logs, 
+  # organizations etc. are needed only in main payer account
+  APIpolicyCFN:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: "Allow access to the subset of support API that can view, describe and refresh Trusted Advisor checks"
+      ManagedPolicyName: "TA-API-subset"
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action: 
+              - 'support:DescribeTrustedAdvisorChecks'
+              - 'support:DescribeTrustedAdvisorCheckResult'
+              - 'support:DescribeTrustedAdvisorCheckSummaries'
+              - 'support:DescribeTrustedAdvisorCheckRefreshStatuses'
+              - 'support:RefreshTrustedAdvisorCheck'
+            Resource: '*'
+  
+  OrgPolicyCFN:
+    Condition: IsMainAccount
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: "Allow listing all accounts in the organization"
+      ManagedPolicyName: "List-org-accounts"
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action: 
+              - 'organizations:ListAccounts'
+            Resource: '*'
+    
+  PayeeAccountAccessCFN:
+    Condition: IsMainAccount
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: "Allow main payer account to log into all accounts in the organization"
+      ManagedPolicyName: "Payee-accounts-access"
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action: 'sts:AssumeRole'
+            Resource: <List of all ARNs>
+
+    # Separate IAM role in main payer account which attaches all the policies
+  refreshRoleCFN:
+    Condition: IsMainAccount
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action: "sts:AssumeRole"
+            Principal:
+              Service: "lambda.amazonaws.com"
+      ManagedPolicyArns:
+        - !Ref APIpolicyCFN
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - !Ref OrgPolicyCFN
+
+# TODO: Needs a separate lambda execution role to be created in main payer account. 
+# This role needs to have all the support perms and cloudwatch perms
