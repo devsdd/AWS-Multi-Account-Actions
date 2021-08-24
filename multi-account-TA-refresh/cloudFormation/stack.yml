@@ -1,6 +1,10 @@
 # Ref: https://aws.amazon.com/blogs/security/how-to-use-a-single-iam-user-to-easily-access-all-your-accounts-by-using-the-aws-cli/
 # "dev" account = main payer here
 # "prod" account = every other account in the organization - main payer account will log into these to get/refresh TA checks
+# ToDo:
+  # * loop through account IDs to create IAM role statements
+  # * stacksets to apply in every account
+  # * remove account IDs
 
 Parameters:
   UserName:
@@ -13,10 +17,10 @@ Parameters:
     Description: "AWS account ID for main payer/organizations account"
     Default: 941837459948
   
-  PayeeAccounts:
-    Type: "List<Number>"
-    Description: "List of AWS account IDs in the organization under the MainAccountID"
-    Default: "031704814400, 580054116499, 427979472953"
+  # PayeeAccounts:
+  #   Type: "List<Number>"
+  #   Description: "List of AWS account IDs in the organization under the MainAccountID"
+  #   Default: "031704814400, 580054116499, 427979472953"
 
 Conditions:
   IsMainAccount: !Equals
@@ -26,17 +30,7 @@ Conditions:
   IsSubAccount: !Not
     - !Condition IsMainAccount
 
-Resources:
-  AccountsListCustomResource:
-    Type: Custom::AccountsListCustomResource
-    Properties:
-      ServiceToken: !!GetAtt AccountsListLambda.arn
-  
-  AccountsListLambda:
-    Type: AWS::Lambda::Function
-    Properties:
-      Description: "Get a list of all AWS accounts in the organization"
-      
+Resources:    
   # This role needs to be created in every org account except the main payer - create in main payer also for now
   AssumeRoleFromMainPayer:
     Condition: IsSubAccount
@@ -80,7 +74,7 @@ Resources:
     Type: AWS::IAM::ManagedPolicy
     Properties:
       Description: "Allow listing all accounts in the organization"
-      ManagedPolicyName: "List-org-accounts"
+      ManagedPolicyName: "List-all-org-accounts"
       PolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -100,7 +94,13 @@ Resources:
         Statement:
           - Effect: Allow
             Action: 'sts:AssumeRole'
-            Resource: <List of all ARNs>
+            Resource:
+              - !Join
+                    - '' 
+                    - - 'arn:aws:iam::'
+                      - '*'
+                      - ':role/'
+                      - 'TA-refresh-non-payer-role'
 
     # Separate IAM role in main payer account which attaches all the policies
   refreshRoleCFN:
@@ -118,6 +118,55 @@ Resources:
         - !Ref APIpolicyCFN
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
         - !Ref OrgPolicyCFN
+
+  # AccountsListCustomResource:
+  #   Type: Custom::AccountsListCustomResource
+  #   Properties:
+  #     ServiceToken: !GetAtt AccountsListLambda.Arn
+  #     FunctionName: !Ref AccountsListLambda
+
+  # AccountsListLambda:
+  #   Condition: IsMainAccount
+  #   Type: AWS::Lambda::Function
+  #   Properties:
+  #     Description: "Get a list of all AWS accounts in the organization"
+  #     FunctionName: List-all-AWS-org-accounts
+  #     Handler: index.handler
+  #     Role: !GetAtt refreshRoleCFN.Arn
+  #     Timeout: 120
+  #     Runtime: python3.8
+  #     Code:
+  #       ZipFile: |
+  #         import boto3
+  #         import cfnresponse
+  #         import json
+
+  #         def lambda_handler(event, context):
+  #             """retrieve list of all accounts in the organization"""
+  #             print("The event is: ", str(event['RequestType']))
+
+  #             print(json.dumps(event, indent=4, sort_keys=True))
+
+  #             # client = boto3.client('organizations')
+  #             # Setup default response
+  #             # response_data = {
+  #             #   'Status': 'SUCCESS',
+  #             #   'PhysicalResourceId': 'Org-Accounts-List-Lambda',
+  #             #   'StackId: 
+  #             # }
+
+  #             # try:
+  #             #   response = client.list_accounts()
+  #             #   accounts_list = []
+  #             #   for row in response['Accounts']:
+  #             #       accounts_list.append(row['Id'])
+                
+  #             #   cfnresponse.send(accounts_list
+
+  #             # except Exception as e:
+
+  #             return event
+
 
 # TODO: Needs a separate lambda execution role to be created in main payer account. 
 # This role needs to have all the support perms and cloudwatch perms

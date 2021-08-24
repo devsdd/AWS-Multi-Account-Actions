@@ -1,5 +1,5 @@
 # Add SNS trigger to this lambda and fire it on CLI with a command like:
-# aws sns publish --topic-arn "arn:aws:sns:us-west-2:941837459948:test-topic" --message "Hello, World" --region us-west-2
+# aws sns publish --topic-arn "arn:aws:sns:us-west-2:<AWS ACCOUNT ID>:test-topic" --message "Hello, World" --region us-west-2
 # Increase lambda timeout to 15 min - done
 # This works within 2 accounts - now have to replicate IAM roles in other accounts for it to work on all
 
